@@ -27,6 +27,11 @@ done
 echo "==> Testing HTTP endpoints..."
 FAILED=0
 
+# Discover the static base URL prefix (e.g., /stable-dev/static)
+BODY=$(curl -sf "http://127.0.0.1:$PORT/")
+BASE=$(echo "$BODY" | grep -oP 'href="[^"]*workbench\.css"' | head -1 | sed 's|/out/vs/code/browser/workbench/workbench.css"||;s|href="||')
+echo "  Static base: $BASE"
+
 # Test 1: Main page returns HTML
 STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")
 if [ "$STATUS" = "200" ]; then
@@ -36,8 +41,7 @@ else
     FAILED=1
 fi
 
-# Test 2: Main page contains workbench
-BODY=$(curl -sf "http://127.0.0.1:$PORT/")
+# Test 2: HTML contains Cursor desktop references
 if echo "$BODY" | grep -q "workbench.desktop.main.css"; then
     echo "  [OK] HTML contains desktop CSS link"
 else
@@ -53,7 +57,7 @@ else
 fi
 
 # Test 3: Desktop workbench JS is served
-STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/out/vs/workbench/workbench.desktop.main.js")
+STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT${BASE}/out/vs/workbench/workbench.desktop.main.js")
 if [ "$STATUS" = "200" ]; then
     echo "  [OK] workbench.desktop.main.js → 200"
 else
@@ -62,7 +66,7 @@ else
 fi
 
 # Test 4: Desktop CSS is served
-STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/out/vs/workbench/workbench.desktop.main.css")
+STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT${BASE}/out/vs/workbench/workbench.desktop.main.css")
 if [ "$STATUS" = "200" ]; then
     echo "  [OK] workbench.desktop.main.css → 200"
 else
@@ -71,7 +75,7 @@ else
 fi
 
 # Test 5: Shim is served
-STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/out/vs/code/browser/workbench/shim.js")
+STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT${BASE}/out/vs/code/browser/workbench/shim.js")
 if [ "$STATUS" = "200" ]; then
     echo "  [OK] shim.js → 200"
 else
@@ -89,7 +93,7 @@ else
 fi
 
 # Test 7: NLS messages
-STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/out/nls.messages.json")
+STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT${BASE}/out/nls.messages.json")
 if [ "$STATUS" = "200" ]; then
     echo "  [OK] nls.messages.json → 200"
 else

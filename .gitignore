@@ -2,3 +2,5 @@ cursor-overlay/
 dist/
 node_modules/
 *.rpm
+.tmp-extract/
+vscode-reh-web-*/

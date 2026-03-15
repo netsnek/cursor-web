@@ -42,11 +42,15 @@ echo "==> Extracting AppImage..."
 rm -rf "$TMPDIR/squashfs-root"
 cd "$TMPDIR"
 
-# Find squashfs offset and extract
-OFFSET=$(grep -aobP 'hsqs' "$APPIMAGE" | tail -1 | cut -d: -f1)
+# Find squashfs offset and extract (try unsquashfs first, fall back to --appimage-extract)
+OFFSET=$(grep -aobP 'hsqs' "$APPIMAGE" | tail -1 | cut -d: -f1 || true)
+EXTRACTED=0
 if [ -n "$OFFSET" ] && command -v unsquashfs &>/dev/null; then
-  unsquashfs -o "$OFFSET" -d squashfs-root "$APPIMAGE" >/dev/null 2>&1
-else
+  if unsquashfs -o "$OFFSET" -d squashfs-root "$APPIMAGE" >/dev/null 2>&1; then
+    EXTRACTED=1
+  fi
+fi
+if [ "$EXTRACTED" = "0" ]; then
   chmod +x "$APPIMAGE"
   "$APPIMAGE" --appimage-extract >/dev/null 2>&1
 fi

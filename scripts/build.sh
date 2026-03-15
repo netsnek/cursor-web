@@ -25,8 +25,8 @@ python3 "$WORKDIR/scripts/merge-product.py" \
 
 # 4. Build VS Code Web (Remote Extension Host Web)
 cd "$WORKDIR/vscode"
-yarn install --frozen-lockfile
-yarn gulp vscode-reh-web-linux-${ARCH}-min
+npm ci
+npx gulp vscode-reh-web-linux-${ARCH}-min
 
 # 5. Assemble dist/
 cd "$WORKDIR"

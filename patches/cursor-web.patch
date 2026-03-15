@@ -59,43 +59,49 @@ index 77881982..139cf9e7 100644
 +	<!-- Cursor Web shim: IPC bridge, CORS proxy fetch, Electron stubs -->
 +	<script type="module" src="{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/shim.js"></script>
  </html>
-diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
-index 13882a9b..58425ac8 100644
---- a/src/vs/server/node/webClientServer.ts
-+++ b/src/vs/server/node/webClientServer.ts
-@@ -5,6 +5,7 @@
- 
- import { createReadStream, promises } from 'fs';
- import * as http from 'http';
-+import * as https from 'https';
- import * as url from 'url';
- import * as cookie from 'cookie';
- import * as crypto from 'crypto';
-@@ -122,6 +123,10 @@ export class WebClientServer {
- 	 */
- 	async handle(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery, pathname: string): Promise<void> {
- 		try {
-+			// CORS proxy: /cors-proxy/HOST/path → https://HOST/path (no allowlist)
-+			if (pathname.startsWith('/cors-proxy/')) {
-+				return this._handleCorsProxy(req, res, parsedUrl, pathname.substring(12));
-+			}
- 			if (pathname.startsWith(STATIC_PATH) && pathname.charCodeAt(STATIC_PATH.length) === CharCode.Slash) {
- 				return this._handleStatic(req, res, pathname.substring(STATIC_PATH.length));
- 			}
-@@ -163,6 +168,71 @@ export class WebClientServer {
- 		return serveFile(filePath, this._environmentService.isBuilt ? CacheControl.NO_EXPIRY : CacheControl.ETAG, this._logService, req, res, headers);
+diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+index ad45bbab..4a2e2393 100644
+--- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
++++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+@@ -104,11 +104,6 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
  	}
  
-+	/**
-+	 * CORS proxy: /cors-proxy/HOST/path → https://HOST/path
-+	 * No allowlist — proxies all external requests for Cursor's API calls.
-+	 */
+ 	public async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+-		// Only serve GET requests
+-		if (req.method !== 'GET') {
+-			return serveError(req, res, 405, `Unsupported method ${req.method}`);
+-		}
+-
+ 		if (!req.url) {
+ 			return serveError(req, res, 400, `Bad request.`);
+ 		}
+@@ -120,6 +115,16 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+ 			return serveError(req, res, 400, `Bad request.`);
+ 		}
+ 
++		// CORS proxy: /cors-proxy/HOST/path → https://HOST/path (accepts all methods)
++		if (pathname.startsWith('/cors-proxy/')) {
++			return this._handleCorsProxy(req, res, parsedUrl, pathname.substring(12));
++		}
++
++		// Only serve GET requests (after CORS proxy which needs POST/OPTIONS)
++		if (req.method !== 'GET') {
++			return serveError(req, res, 405, `Unsupported method ${req.method}`);
++		}
++
+ 		// Serve from both '/' and serverBasePath
+ 		if (this._serverBasePath !== undefined && pathname.startsWith(this._serverBasePath)) {
+ 			pathname = pathname.substring(this._serverBasePath.length) || '/';
+@@ -190,6 +195,56 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+ 		return void res.end('Not found');
+ 	}
+ 
 +	private _handleCorsProxy(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery, targetPath: string): void {
++		const https = require('https') as typeof import('https');
 +		const slashIdx = targetPath.indexOf('/');
 +		const targetHost = slashIdx > 0 ? targetPath.substring(0, slashIdx) : targetPath;
 +		const targetPathname = slashIdx > 0 ? targetPath.substring(slashIdx) : '/';
 +
-+		// Handle CORS preflight
 +		if (req.method === 'OPTIONS') {
 +			res.writeHead(200, {
 +				'Access-Control-Allow-Origin': '*',
@@ -106,13 +112,10 @@ index 13882a9b..58425ac8 100644
 +			return void res.end();
 +		}
 +
-+		// Collect request body
 +		const chunks: Buffer[] = [];
 +		req.on('data', (c: Buffer) => chunks.push(c));
 +		req.on('end', () => {
 +			const body = Buffer.concat(chunks);
-+
-+			// Forward headers, stripping hop-by-hop
 +			const forwardHeaders: http.OutgoingHttpHeaders = { ...req.headers };
 +			delete forwardHeaders['host'];
 +			delete forwardHeaders['origin'];
@@ -121,40 +124,36 @@ index 13882a9b..58425ac8 100644
 +			delete forwardHeaders['accept-encoding'];
 +			forwardHeaders['host'] = targetHost;
 +
-+			const proxyReq = https.request(
-+				{
-+					hostname: targetHost,
-+					port: 443,
-+					path: targetPathname + (parsedUrl.search || ''),
-+					method: req.method,
-+					headers: forwardHeaders,
-+				},
-+				(proxyRes) => {
-+					const responseHeaders: http.OutgoingHttpHeaders = { ...proxyRes.headers };
-+					responseHeaders['access-control-allow-origin'] = '*';
-+					responseHeaders['access-control-expose-headers'] = '*';
-+					delete responseHeaders['access-control-allow-credentials'];
-+					res.writeHead(proxyRes.statusCode || 502, responseHeaders);
-+					proxyRes.pipe(res);
-+				}
-+			);
++			const proxyReq = https.request({
++				hostname: targetHost, port: 443,
++				path: targetPathname + (parsedUrl.search || ''),
++				method: req.method, headers: forwardHeaders,
++			}, (proxyRes) => {
++				const responseHeaders: http.OutgoingHttpHeaders = { ...proxyRes.headers };
++				responseHeaders['access-control-allow-origin'] = '*';
++				responseHeaders['access-control-expose-headers'] = '*';
++				delete responseHeaders['access-control-allow-credentials'];
++				res.writeHead(proxyRes.statusCode || 502, responseHeaders);
++				proxyRes.pipe(res);
++			});
 +
 +			proxyReq.on('error', (err) => {
 +				res.writeHead(502, { 'Content-Type': 'text/plain' });
 +				res.end('Proxy error: ' + err.message);
 +			});
-+
-+			if (body.length > 0) {
-+				proxyReq.write(body);
-+			}
++			if (body.length > 0) { proxyReq.write(body); }
 +			proxyReq.end();
 +		});
 +	}
 +
- 	private _getResourceURLTemplateAuthority(uri: URI): string | undefined {
- 		const index = uri.authority.indexOf('.');
- 		return index !== -1 ? uri.authority.substring(index + 1) : undefined;
-@@ -429,7 +499,7 @@ export class WebClientServer {
+ 	public handleUpgrade(req: http.IncomingMessage, socket: net.Socket) {
+ 		let reconnectionToken = generateUuid();
+ 		let isReconnection = false;
+diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
+index 13882a9b..46451ed6 100644
+--- a/src/vs/server/node/webClientServer.ts
++++ b/src/vs/server/node/webClientServer.ts
+@@ -429,7 +429,7 @@ export class WebClientServer {
  			'worker-src \'self\' data: blob:;',
  			'style-src \'self\' \'unsafe-inline\';',
  			'connect-src \'self\' ws: wss: https:;',
