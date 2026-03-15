@@ -6,37 +6,72 @@ Run [Cursor](https://cursor.sh) in the browser using VS Code Web as the backend.
 
 ```
 Browser
-  |
-  |  Cursor Desktop Workbench (workbench.desktop.main.js)
-  |  — Full Cursor UI: login, chat, agent mode, extensions
-  |  — Thinks it's running in Electron (Cursor desktop app)
-  |
-  |  Shim (adapter/shim.js)
-  |  — Bridges Electron IPC APIs to browser equivalents
-  |  — CORS proxy for external API calls
-  |  — MessagePort protocol, channel handlers, auth seeding
-  |
-  v
-VS Code Web Server (server-main.js)
+  │
+  │  Cursor Desktop Workbench (workbench.desktop.main.js)
+  │  — Full Cursor UI: login, chat, agent mode, extensions
+  │  — Thinks it's running in Electron (Cursor desktop app)
+  │
+  │  Shim (adapter/shim.js)
+  │  — Bridges Electron IPC to browser + VS Code Web backend
+  │  — IPC binary protocol (varint serialization, channels, events)
+  │  — CORS proxy, auth seeding, MessagePort protocol
+  │
+  ├──── IPC channels (Electron main process emulation) ────┐
+  │     nativeHost, sign/vsda, storage, keyboardLayout,    │
+  │     localFilesystem, extensions, extensionHostStarter,  │
+  │     localPty, workspaces, userDataProfiles, update, ... │
+  │                                                         │
+  │     localPty ──WebSocket──► PTY Server (pty-server.js)  │
+  │                             node-pty process management │
+  │                                                         │
+  ├──── Remote channels (VS Code Web server) ──────────────┤
+  │     remoteterminal, remoteFilesystem, remoteExtensions, │
+  │     search, debug, git, file watcher                    │
+  │                                                         │
+  v                                                         │
+VS Code Web Server (server-main.js) ◄──────────────────────┘
   — Terminal via WebSocket (remote terminal backend)
   — File system via WebSocket
-  — Extension host (Cursor's, with AI transport)
+  — Extension host (runs Cursor extensions)
   — Search, debugging, git — all via WebSocket
+  — CORS proxy middleware (same-origin API calls)
 ```
 
-**The Cursor Desktop Workbench** (`workbench.desktop.main.js`) is Cursor's full UI bundle — it provides the complete Cursor interface including login/signup, onboarding, AI chat, composer, agent mode, and all editor features. It was originally built for Electron (Cursor's desktop app), hence the name "desktop". In Cursor Web, it runs in the browser with a shim that bridges the Electron APIs it expects.
+## How the IPC bridge works
 
-**VS Code Web** (`server-main.js`) is the backend. It's built from [VS Code OSS](https://github.com/microsoft/vscode) source using the `vscode-reh-web` (Remote Extension Host Web) build target. It provides terminal, file system, extension host, and all other services over WebSocket — the same way VS Code Remote works, but served to the browser.
+The Cursor Desktop Workbench communicates with Electron's main process via IPC channels using a binary protocol (varint-encoded messages with channel routing). The shim implements this full protocol and handles every channel:
 
-**The shim** (`adapter/shim.js`) bridges the gap. The Cursor Desktop Workbench expects Electron's IPC (`ipcRenderer.send/invoke/on`), MessagePort protocol, native host APIs, sign service, storage, and more. The shim implements all of these using browser APIs (localStorage, fetch, MessageChannel, etc.) and stubs out what can't work in a browser (local PTY, native clipboard, window management).
+| IPC Channel | Bridge | Description |
+|---|---|---|
+| `localPty` | WebSocket → PTY server | Terminal process management (create, input, resize, shutdown). Bridges to `adapter/pty-server.js` which uses `node-pty`. Also fires `onPtyHostStart` so the workbench knows the PTY host is alive. |
+| `nativeHost` | Browser APIs | Window management, clipboard, dialogs, OS info. Uses `window.open`, `navigator.clipboard`, `window.prompt` etc. |
+| `sign` | vsda WASM | Connection signing handshake. Loads `vsda_bg.wasm` for validator/sign operations. |
+| `storage` | localStorage | Persistent key-value storage. Prefixed `cursor-web-storage:` keys. |
+| `localFilesystem` | Fake FS | Returns directory stats for `.cursor/` paths, FileNotFound for files (VS Code uses defaults). Write operations silently succeed. |
+| `extensionHostStarter` | Stub | Returns fake IDs. The real extension host runs server-side via the remote connection. |
+| `keyboardLayout` | Static | Returns keyboard layout info (configurable). |
+| `workspaces` | Stub | Returns empty recently-opened list. |
+| `extensions` | Stub | Returns empty control manifest. Real extensions load via remote extension host. |
+| `userDataProfiles` | Stub | Returns empty profile list. |
+| `update` | Stub | Returns idle state. |
+| `logger`, `tracing`, `policy`, `abuse`, `tray` | Stub | Silently absorbed. |
 
-## How it works
+The remote terminal backend (VS Code Web server's built-in terminal service over WebSocket) is the primary terminal path. The localPty bridge provides shell detection (`getDefaultSystemShell`, `getEnvironment`, `getProfiles`) and serves as a fallback.
 
-1. **Build VS Code Web from source** — `vscode/` submodule at the matching VS Code version
-2. **Apply patches** — CORS proxy, product.json merge, HTML modifications
-3. **Overlay Cursor assets** — desktop workbench JS/CSS, extensions, NLS, media, extension host
-4. **Disable local terminal backend** — the desktop workbench registers both local (Electron IPC) and remote (WebSocket) terminal backends; we disable local since there's no Electron
-5. **Result**: single `node` process serving everything on one port
+### IPC binary protocol
+
+Messages use varint-encoded serialization with typed tags:
+
+- **Types**: Undefined(0), String(1), Buffer(2), VSBuffer(3), Array(4), Object(5), Int(6)
+- **Protocol messages**: Request(100), Cancel(101), EventSubscribe(102), EventDispose(103), Initialize(200), ResponseSuccess(201), ResponseError(202), EventFire(300)
+- **Flow**: Workbench sends `vscode:hello` → shim responds with Initialize → workbench sends channel requests → shim routes to handlers and responds
+
+### MessagePort protocol
+
+The workbench also uses MessagePort for shared process and extension host communication:
+
+- **Shared process ports**: Full IPC binary protocol (same as above)
+- **Extension host ports**: Simplified byte protocol (Ready=2, Initialized=1). Shim fakes the handshake so the workbench doesn't wait 60s for a local extension host process.
 
 ## Quick start
 
@@ -47,7 +82,8 @@ scripts/extract-cursor.sh latest arm64   # or amd64
 # Build VS Code Web + overlay Cursor
 scripts/build.sh
 
-# Run
+# Run (PTY server on port+1, VS Code Web server on main port)
+PTY_PORT=20001 node dist/adapter/pty-server.cjs &
 node dist/out/server-main.js --host 0.0.0.0 --port 20000 --without-connection-token
 ```
 
@@ -59,13 +95,16 @@ Open `http://localhost:20000` in your browser. You'll see the Cursor login page.
 cursor-web/
   vscode/              VS Code OSS (git submodule)
   adapter/
-    shim.js            Electron-to-browser bridge (IPC, CORS, auth, boot)
+    shim.js            IPC bridge — Electron to browser + VS Code Web backend
+    pty-server.js      WebSocket PTY server (node-pty, runs on port+1)
   patches/
     cursor-web.patch   TypeScript source patches for VS Code
   scripts/
     extract-cursor.sh  Download + extract Cursor AppImage
     build.sh           Build VS Code Web + overlay Cursor
     merge-product.py   Merge VS Code + Cursor product.json
+  test/
+    terminal-*.mjs     Terminal rendering verification tests
   cursor-overlay/      Extracted Cursor assets (not in git)
   dist/                Build output (not in git)
 ```

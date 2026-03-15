@@ -153,6 +153,10 @@ function buildInit() {
     return concatBuffers(serializeValue([ProtoType.Initialize]), writeUndefined());
 }
 
+// Event subscription registry: maps subscription id → { channelName, name }
+// Used to fire events back to the workbench (e.g., localPty.onProcessData)
+const _eventSubscriptions = new Map();
+
 function handleProtocolMessage(buf, respond) {
     const msg = parseMessage(buf);
     if (!msg) {
@@ -166,19 +170,194 @@ function handleProtocolMessage(buf, respond) {
         showStatus?.(`[IPC] req ${channelName}.${name} id=${id} ${argStr}`);
         try {
             const result = handleChannelRequest(channelName, name, arg);
-            respond(buildResponse(ProtoType.ResponseSuccess, id, result));
+            if (result instanceof Promise) {
+                result.then(r => respond(buildResponse(ProtoType.ResponseSuccess, id, r)))
+                      .catch(e => respond(buildResponse(ProtoType.ResponseError, id, { message: e.message, name: e.name })));
+            } else {
+                respond(buildResponse(ProtoType.ResponseSuccess, id, result));
+            }
         } catch(e) {
             showStatus?.(`[IPC] ERROR ${channelName}.${name}: ${e.message}`);
             respond(buildResponse(ProtoType.ResponseError, id, { message: e.message, name: e.name }));
         }
     } else if (type === ProtoType.Cancel || type === ProtoType.EventDispose) {
-        // Nothing to do
+        _eventSubscriptions.delete(id);
     } else if (type === ProtoType.EventSubscribe) {
         showStatus?.(`[IPC] eventSub ${channelName}.${name} id=${id}`);
+        _eventSubscriptions.set(id, { channelName, name, respond });
+        // Register PTY event listeners when subscribing to localPty events
+        if (channelName === 'localPty') {
+            _ptyEventSubscribe(name, id, respond);
+        }
     } else if (type === ProtoType.Initialize) {
         // Workbench sending init — ignore
     } else {
         showStatus?.(`[IPC] unhandled type=${type}`);
+    }
+}
+
+// Fire an event back to the workbench
+function fireEvent(subscriptionId, data, respond) {
+    respond(buildResponse(ProtoType.EventFire, subscriptionId, data));
+}
+
+// === Local PTY Bridge ===
+// Bridges localPty IPC channel to WebSocket PTY server (adapter/pty-server.js)
+// The PTY server runs on main server port + 1
+let _ptyWs = null;
+let _ptyWsReady = null;
+let _ptyNextReqId = 1;
+const _ptyPendingRequests = new Map(); // reqId → { resolve, reject }
+const _ptyEventListeners = new Map(); // eventName → [{ subscriptionId, respond }]
+
+function _getPtyWs() {
+    if (_ptyWsReady) return _ptyWsReady;
+    _ptyWsReady = new Promise((resolve, reject) => {
+        const port = parseInt(location.port) + 1;
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${proto}//${location.hostname}:${port}`;
+        showStatus?.(`[PTY] Connecting to ${url}...`);
+        const ws = new WebSocket(url);
+        ws.onopen = () => showStatus?.('[PTY] WebSocket connected');
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'ready') { _ptyWs = ws; resolve(ws); showStatus?.('[PTY] Ready'); return; }
+            if (msg.type === 'response') {
+                const p = _ptyPendingRequests.get(msg.reqId);
+                if (p) { _ptyPendingRequests.delete(msg.reqId); p.resolve(msg.data); }
+                return;
+            }
+            if (msg.type === 'created') {
+                _firePtyEvent('onProcessReady', { id: msg.id, event: { pid: msg.pid, cwd: msg.cwd, requiresWindowsMode: false } });
+                return;
+            }
+            if (msg.type === 'data') {
+                _firePtyEvent('onProcessData', { id: msg.id, event: msg.data });
+                return;
+            }
+            if (msg.type === 'exit') {
+                _firePtyEvent('onProcessExit', { id: msg.id, event: msg.exitCode ?? -1 });
+                return;
+            }
+        };
+        ws.onerror = () => { showStatus?.('[PTY] WebSocket error'); reject(new Error('PTY WebSocket failed')); };
+        ws.onclose = () => { showStatus?.('[PTY] WebSocket closed'); _ptyWs = null; _ptyWsReady = null; };
+    });
+    return _ptyWsReady;
+}
+
+function _firePtyEvent(eventName, data) {
+    const listeners = _ptyEventListeners.get(eventName);
+    if (!listeners) return;
+    for (const { subscriptionId, respond } of listeners) {
+        fireEvent(subscriptionId, data, respond);
+    }
+}
+
+function _ptyEventSubscribe(eventName, subscriptionId, respond) {
+    if (!_ptyEventListeners.has(eventName)) _ptyEventListeners.set(eventName, []);
+    _ptyEventListeners.get(eventName).push({ subscriptionId, respond });
+    // When subscribing to onPtyHostStart, fire it immediately so the workbench
+    // knows the PTY host is alive and starts requesting profiles/createProcess
+    if (eventName === 'onPtyHostStart') {
+        _getPtyWs().then(() => {
+            showStatus?.('[PTY] Firing onPtyHostStart event');
+            fireEvent(subscriptionId, undefined, respond);
+        }).catch(() => {});
+    } else {
+        _getPtyWs().catch(() => {}); // ensure connected
+    }
+}
+
+async function handleLocalPty(method, arg) {
+    switch (method) {
+        case 'createProcess': {
+            const config = Array.isArray(arg) ? arg[0] : arg;
+            const ws = await _getPtyWs();
+            return new Promise((resolve) => {
+                const handler = (event) => {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'created') {
+                        ws.removeEventListener('message', handler);
+                        resolve(msg.id);
+                    }
+                };
+                ws.addEventListener('message', handler);
+                ws.send(JSON.stringify({
+                    type: 'create',
+                    shell: config?.executable || config?.shell,
+                    args: config?.args || [],
+                    cwd: config?.cwd || _homeDir,
+                    cols: config?.cols || 80,
+                    rows: config?.rows || 24,
+                    env: config?.env || {},
+                }));
+            });
+        }
+        case 'start': return undefined; // process starts on creation
+        case 'input': {
+            const id = Array.isArray(arg) ? arg[0] : arg?.id;
+            const data = Array.isArray(arg) ? arg[1] : arg?.data;
+            const ws = await _getPtyWs();
+            ws.send(JSON.stringify({ type: 'input', id, data }));
+            return undefined;
+        }
+        case 'resize': {
+            const id = Array.isArray(arg) ? arg[0] : arg?.id;
+            const cols = Array.isArray(arg) ? arg[1] : arg?.cols;
+            const rows = Array.isArray(arg) ? arg[2] : arg?.rows;
+            const ws = await _getPtyWs();
+            ws.send(JSON.stringify({ type: 'resize', id, cols, rows }));
+            return undefined;
+        }
+        case 'shutdown': {
+            const id = Array.isArray(arg) ? arg[0] : arg?.id;
+            const ws = await _getPtyWs();
+            ws.send(JSON.stringify({ type: 'shutdown', id }));
+            return undefined;
+        }
+        case 'getDefaultSystemShell': {
+            const reqId = String(_ptyNextReqId++);
+            const ws = await _getPtyWs();
+            return new Promise((resolve, reject) => {
+                _ptyPendingRequests.set(reqId, { resolve, reject });
+                ws.send(JSON.stringify({ type: 'getDefaultSystemShell', reqId }));
+                setTimeout(() => { if (_ptyPendingRequests.delete(reqId)) reject(new Error('timeout')); }, 10000);
+            });
+        }
+        case 'getEnvironment': {
+            const reqId = String(_ptyNextReqId++);
+            const ws = await _getPtyWs();
+            return new Promise((resolve, reject) => {
+                _ptyPendingRequests.set(reqId, { resolve, reject });
+                ws.send(JSON.stringify({ type: 'getEnvironment', reqId }));
+                setTimeout(() => { if (_ptyPendingRequests.delete(reqId)) reject(new Error('timeout')); }, 10000);
+            });
+        }
+        case 'getProfiles': {
+            const reqId = String(_ptyNextReqId++);
+            const ws = await _getPtyWs();
+            return new Promise((resolve, reject) => {
+                _ptyPendingRequests.set(reqId, { resolve, reject });
+                ws.send(JSON.stringify({ type: 'getProfiles', reqId }));
+                setTimeout(() => { if (_ptyPendingRequests.delete(reqId)) reject(new Error('timeout')); }, 10000);
+            });
+        }
+        case 'acknowledgeDataEvent': case 'processBinary': case 'setTerminalLayoutInfo':
+        case 'reduceConnectionGraceTime': case 'serializeTerminalState': case 'reviveTerminalProcesses':
+        case 'refreshProperty': case 'updateTitle': case 'updateIcon': case 'updateProperty':
+        case 'installAutoReply': case 'uninstallAllAutoReplies': case 'getWslPath':
+        case 'setUnicodeVersion': case 'freePortKillProcess': case 'getRevivedPtyNewId':
+        case 'requestDetachInstance': case 'acceptDetachInstanceReply': case 'orphanQuestionReply':
+        case 'shutdownAllForWorkspace': case 'clearBuffer': case 'attachToProcess':
+        case 'detachFromProcess':
+            return undefined;
+        case 'getTerminalLayoutInfo': return undefined;
+        case 'listProcesses': return [];
+        case 'getPerformanceMarks': return [];
+        default:
+            showStatus?.(`[PTY] unhandled: ${method}`);
+            return undefined;
     }
 }
 
@@ -229,8 +408,8 @@ function handleChannelRequest(channelName, methodName, arg) {
         case 'userDataSyncAccount': return (methodName === '_getInitialData') ? { account: undefined } : undefined;
         case 'userDataSyncStoreManagement': return undefined;
         case 'userDataSync': return (methodName === '_getInitialData') ? { version: 1, machineId: '', enabledExtensions: [], enabledResources: [] } : undefined;
-        // Local PTY — main process manages local terminals, remote server has its own
-        case 'localPty': return (methodName === 'getPerformanceMarks') ? [] : undefined;
+        // Local PTY — bridged to WebSocket PTY server (adapter/pty-server.js)
+        case 'localPty': return handleLocalPty(methodName, arg);
         // Path inspection — desktop checks if executables exist locally
         case 'pathInspection': return false;
         // Continuous profiling

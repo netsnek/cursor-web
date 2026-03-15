@@ -127,20 +127,14 @@ sed -i "s/img-src 'self' https: data: blob:/img-src 'self' https: data: blob: vs
 # MIME types: add .woff2, .ttf, .wasm if not already present
 sed -i 's/".woff":"application\/font-woff"/".woff":"application\/font-woff",".woff2":"font\/woff2",".ttf":"font\/ttf",".wasm":"application\/wasm"/' dist/out/server-main.js
 
-# 11. Post-build patches for Cursor Web workbench (client bundle)
-echo "==> Applying post-build patches to Cursor Web workbench..."
-
-# Disable local terminal backend (uses Electron IPC which doesn't exist in browser).
-# The remote terminal backend (WebSocket to VS Code Web server) handles all terminals.
-# Patch: make the local terminal backend constructor return immediately without registering.
-if [ -f dist/out/vs/workbench/workbench.desktop.main.js ]; then
-    # The local terminal backend registration: registerTerminalBackend(i),t.didRegisterBackend(i)
-    # We disable it by making the constructor return before registration
-    sed -i 's/this\.ID="workbench\.contrib\.localTerminalBackend"}constructor(e,t){const i=e\.createInstance(jLi);/this.ID="workbench.contrib.localTerminalBackend"}constructor(e,t){return;const i=e.createInstance(jLi);/' \
-        dist/out/vs/workbench/workbench.desktop.main.js
-fi
+# 11. Install PTY server (bridges localPty IPC to real node-pty processes)
+# Uses .cjs extension because dist/package.json has "type": "module"
+echo "==> Installing PTY server..."
+mkdir -p dist/adapter
+cp adapter/pty-server.js dist/adapter/pty-server.cjs
 
 echo ""
 echo "==> Build complete!"
 echo "    Output: $WORKDIR/dist/"
-echo "    Start:  node dist/out/server-main.js --host 0.0.0.0 --port 20000 --without-connection-token"
+echo "    Start:  PTY_PORT=20001 node dist/adapter/pty-server.cjs &"
+echo "            node dist/out/server-main.js --host 0.0.0.0 --port 20000 --without-connection-token"
