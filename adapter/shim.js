@@ -653,6 +653,10 @@ globalThis._VSCODE_PRODUCT_JSON = Object.assign({
     "serverDataFolderName": ".cursor-server",
     "tunnelApplicationName": "cursor-tunnel",
     "urlProtocol": "cursor",
+    "nameLong": "Cursor",
+    "nameShort": "Cursor",
+    "applicationName": "cursor",
+    "windowTitle": "${dirty}${activeEditorShort}${separator}${rootName}${separator}${profileName}${separator}${appName}",
 }, webConfig.productConfiguration || {});
 
 globalThis._VSCODE_PACKAGE_JSON = {
@@ -670,7 +674,9 @@ async function seedAuthTokens() {
     // Clean up stale desktop keys that break web UI, but preserve layout state
     const _layoutKeepPrefixes = ['cursor/editorLayout.', 'cursor/agentLayout.', 'cursor/unifiedAppLayout',
         'cursor/layoutControl.', 'cursor/noTitlebarLayout.', 'cursor/migrateEditorMode.',
-        'cursor/defaultLayoutMode', 'cursor/globalLayoutState'];
+        'cursor/defaultLayoutMode', 'cursor/globalLayoutState',
+        'cursor.featureStatus.', 'cursorai/featureConfigCache',
+        'cursorAuth/'];
     for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i);
         if (k?.startsWith(_storagePrefix + 'cursor/') || k?.startsWith(_storagePrefix + 'cursor.')) {
@@ -695,6 +701,14 @@ async function seedAuthTokens() {
         // Don't skip onboarding — it contains the login UI
         localStorage.setItem(_layoutFixKey, _layoutFixVersion);
         showStatus('Layout reset applied (migration disabled, onboarding skipped).');
+    }
+    // Pre-seed data privacy onboarding config so the workbench doesn't wait 120s
+    // for the extension host to register a gRPC transport provider before it can
+    // call checkNumberConfigUnauthenticated. The onboarding code checks this key
+    // and skips the API call if a valid value exists.
+    if (!localStorage.getItem(_storagePrefix + 'cursor.featureStatus.dataPrivacyOnboarding')) {
+        localStorage.setItem(_storagePrefix + 'cursor.featureStatus.dataPrivacyOnboarding', 'legacy');
+        showStatus('Pre-seeded dataPrivacyOnboarding=legacy (skip slow API call).');
     }
     if (localStorage.getItem(_storagePrefix + 'cursorAuth/accessToken')) {
         showStatus('Auth tokens already in localStorage.');
