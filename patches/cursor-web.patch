@@ -8,6 +8,7 @@ index 30d59bc0..94aae372 100644
  	'.woff': 'application/font-woff',
 +	'.woff2': 'font/woff2',
 +	'.ttf': 'font/ttf',
++	'.wasm': 'application/wasm',
  };
  
  export function getMediaOrTextMime(path: string): string | undefined {
@@ -158,7 +159,7 @@ index 13882a9b..46451ed6 100644
  			'style-src \'self\' \'unsafe-inline\';',
  			'connect-src \'self\' ws: wss: https:;',
 -			'font-src \'self\' blob:;',
-+			'font-src \'self\' https: blob: data:;',
++			'font-src \'self\' https: blob: data: vscode-remote-resource:;',
  			'manifest-src \'self\';'
  		].join(' ');
  

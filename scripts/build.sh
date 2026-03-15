@@ -75,17 +75,22 @@ done
 cp adapter/shim.js dist/out/vs/code/browser/workbench/shim.js
 
 # 8. Install Cursor-specific node_modules (not in VS Code's deps)
-# Copy from extracted Cursor overlay — these include @sentry, @opentelemetry, etc.
+# Cursor's extension host needs @sentry, @opentelemetry, and many other packages.
+# Copy from extracted Cursor overlay, replacing VS Code's versions where needed
+# (e.g. chownr 1.x CJS → 3.x ESM required by opentelemetry).
 CURSOR_MODULES="$WORKDIR/cursor-overlay/node_modules"
 if [ -d "$CURSOR_MODULES" ]; then
     echo "==> Copying Cursor node_modules..."
     for pkg in "$CURSOR_MODULES"/*; do
         PKG_NAME=$(basename "$pkg")
-        if [ ! -e "$WORKDIR/dist/node_modules/$PKG_NAME" ]; then
-            cp -a "$pkg" "$WORKDIR/dist/node_modules/$PKG_NAME"
-        fi
+        cp -a "$pkg" "$WORKDIR/dist/node_modules/$PKG_NAME"
     done
 fi
+
+# 9. Stub for @vscode/windows-process-tree (Windows-only, not needed on Linux)
+mkdir -p dist/node_modules/@vscode/windows-process-tree
+echo 'module.exports={getProcessTree:()=>undefined,getProcessList:()=>[]};' > dist/node_modules/@vscode/windows-process-tree/index.js
+echo '{"name":"@vscode/windows-process-tree","version":"0.0.0","main":"index.js"}' > dist/node_modules/@vscode/windows-process-tree/package.json
 
 # 9. Create Electron stub for cursor extensions that require('electron')
 mkdir -p dist/out/node_modules/electron
