@@ -54,6 +54,11 @@ echo "--- Browser Tests ---"
 node "$WORKDIR/test/browser.mjs" --port "$PORT" --timeout 25 || ((TOTAL_FAIL++))
 echo ""
 
+# 3. Login persistence test
+echo "--- Login Tests ---"
+node "$WORKDIR/test/login.mjs" --port "$PORT" --timeout 15 || ((TOTAL_FAIL++))
+echo ""
+
 echo "============================================"
 if [ "$TOTAL_FAIL" -eq 0 ]; then
     echo "  ALL TEST SUITES PASSED"

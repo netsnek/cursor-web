@@ -25,8 +25,8 @@ STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE_URL/")
 # 2. HTML contains desktop CSS link
 echo "$BODY" | grep -q "workbench.desktop.main.css" && pass "HTML has desktop CSS" || fail "HTML missing desktop CSS"
 
-# 3. HTML contains desktop shim
-echo "$BODY" | grep -q "workbench-desktop-shim.js" && pass "HTML has desktop shim" || fail "HTML missing desktop shim"
+# 3. HTML contains shim.js
+echo "$BODY" | grep -q "shim.js" && pass "HTML has shim.js" || fail "HTML missing shim.js"
 
 # 4. HTML contains NLS loader
 echo "$BODY" | grep -q "nls.messages" && pass "HTML has NLS loader" || fail "HTML missing NLS loader"
@@ -39,9 +39,9 @@ STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE_URL${STATIC_BASE}/out/vs
 STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE_URL${STATIC_BASE}/out/vs/workbench/workbench.desktop.main.css")
 [ "$STATUS" = "200" ] && pass "workbench.desktop.main.css → 200" || fail "workbench.desktop.main.css → $STATUS"
 
-# 7. Desktop shim JS
-STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE_URL${STATIC_BASE}/out/vs/code/browser/workbench/workbench-desktop-shim.js")
-[ "$STATUS" = "200" ] && pass "workbench-desktop-shim.js → 200" || fail "workbench-desktop-shim.js → $STATUS"
+# 7. Shim JS
+STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE_URL${STATIC_BASE}/out/vs/code/browser/workbench/shim.js")
+[ "$STATUS" = "200" ] && pass "shim.js → 200" || fail "shim.js → $STATUS"
 
 # 8. NLS messages
 STATUS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE_URL${STATIC_BASE}/out/nls.messages.json")

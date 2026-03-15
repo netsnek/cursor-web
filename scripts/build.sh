@@ -72,7 +72,7 @@ for ext in cursor-overlay/extensions/*/; do
 done
 
 # 7. Install shim
-cp adapter/shim.js dist/out/vs/code/browser/workbench/workbench-desktop-shim.js
+cp adapter/shim.js dist/out/vs/code/browser/workbench/shim.js
 
 # 8. Install Cursor-specific node_modules (not in VS Code's deps)
 # Copy from extracted Cursor overlay — these include @sentry, @opentelemetry, etc.

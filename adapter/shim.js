@@ -566,8 +566,8 @@ function _fire(channel, ...args) {
 const configElement = document.getElementById('vscode-workbench-web-configuration');
 const webConfig = JSON.parse(configElement?.getAttribute('data-settings') || '{}');
 
-// Home directory: configurable from webConfig, defaults to /home/coder
-const _homeDir = webConfig.homeDir || '/home/coder';
+// Home directory: configurable via URL ?homeDir= or webConfig, defaults to /home/coder
+const _homeDir = new URLSearchParams(window.location.search).get('homeDir') || webConfig.homeDir || '/home/coder';
 const _dataDir = _homeDir + '/.cursor';
 
 globalThis.vscode = {
@@ -692,8 +692,7 @@ async function seedAuthTokens() {
         // Reset layout mode — default is M0.Editor ("editor")
         localStorage.removeItem(_storagePrefix + 'cursor/unifiedAppLayout');
         localStorage.removeItem(_storagePrefix + 'cursor/migrateEditorMode.forceUnified');
-        // Skip onboarding agent walkthrough (prevents onboarding from forcing Agent mode)
-        localStorage.setItem(_storagePrefix + 'cursor/hasSeenAgentWindowWalkthrough', 'true');
+        // Don't skip onboarding — it contains the login UI
         localStorage.setItem(_layoutFixKey, _layoutFixVersion);
         showStatus('Layout reset applied (migration disabled, onboarding skipped).');
     }
@@ -713,35 +712,6 @@ async function seedAuthTokens() {
     } catch (e) {
         showStatus('Auth seed fetch failed: ' + e.message);
     }
-}
-
-// === Auto-dismiss Cursor onboarding overlay ===
-// The onboarding walkthrough forces Agent mode and is unnecessary for serve-web.
-// Remove it from DOM immediately whenever it appears.
-function dismissOnboardingOverlay() {
-    const check = () => {
-        const container = document.querySelector('.onboarding-v2-container');
-        if (container) {
-            // Walk up to the full-screen flex wrapper and remove it entirely
-            let target = container;
-            while (target.parentElement && target.parentElement !== document.body
-                && getComputedStyle(target.parentElement).height === '100%') {
-                target = target.parentElement;
-            }
-            target.remove();
-            showStatus('Removed onboarding overlay from DOM');
-            return;
-        }
-        // Also check for the overlay variant
-        const overlay = document.querySelector('.onboarding-v2-overlay');
-        if (overlay) {
-            overlay.remove();
-            showStatus('Removed onboarding overlay from DOM');
-            return;
-        }
-        setTimeout(check, 500);
-    };
-    setTimeout(check, 1500);
 }
 
 // === Boot ===
@@ -831,7 +801,7 @@ async function boot() {
         showStatus('Calling workbench.main()...');
         const result = workbench.main(desktopConfig);
         showStatus('workbench.main() returned: ' + typeof result);
-        dismissOnboardingOverlay(); // Auto-dismiss CORS-blocked overlay
+        // Note: onboarding overlay is NOT auto-dismissed — it contains the login UI
         if (result?.then) {
             result.then(() => showStatus('Promise resolved — workbench started.'))
                   .catch(e => showStatus('Promise rejected: ' + e + '\nStack: ' + (e?.stack || 'none')));
