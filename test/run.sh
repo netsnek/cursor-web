@@ -59,6 +59,11 @@ echo "--- Login Tests ---"
 node "$WORKDIR/test/login.mjs" --port "$PORT" --timeout 15 || ((TOTAL_FAIL++))
 echo ""
 
+# 4. Workbench integration test (extension host, IPC, CSP, MIME, product.json)
+echo "--- Workbench Integration Tests ---"
+node "$WORKDIR/test/workbench.mjs" --port "$PORT" --timeout 25 || ((TOTAL_FAIL++))
+echo ""
+
 echo "============================================"
 if [ "$TOTAL_FAIL" -eq 0 ]; then
     echo "  ALL TEST SUITES PASSED"
