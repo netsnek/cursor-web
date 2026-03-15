@@ -111,6 +111,7 @@ echo "==> Applying post-build patches to dist/out/server-main.js..."
 
 # Terminal backend: skip duplicate registration (desktop + remote both register)
 sed -i "s/if(this.a.has(t))throw new Error(\`A terminal backend with remote authority '\${t}' was already registered.\`);this.a.set(t,e)/if(this.a.has(t))return;this.a.set(t,e)/" dist/out/server-main.js
+sed -i "s/if(this._backends.has(e))throw new Error(\`A terminal backend with remote authority '\${e}' was already registered.\`);this._backends.set(e,n)/if(this._backends.has(e))return;this._backends.set(e,n)/" dist/out/vs/workbench/workbench.desktop.main.js
 
 # CSP: allow vscode-remote-resource: for fonts and images
 sed -i "s/font-src 'self' blob:/font-src 'self' https: blob: data: vscode-remote-resource:/" dist/out/server-main.js

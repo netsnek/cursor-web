@@ -563,19 +563,18 @@ function setupExtensionHostPort(port) {
         // Absorb any messages from the workbench (init data, etc.)
     };
     port.start();
-    // Send Initialized (byte 1) then Ready (byte 2) after a short delay
-    // The workbench's _establishProtocol waits for Initialized,
-    // then _performHandshake waits for Ready.
-    setTimeout(() => {
-        showStatus?.('[ExtHost] Sending Initialized (byte 1)...');
-        const buf1 = new Uint8Array([1]);
-        port.postMessage(buf1.buffer);
-    }, 50);
+    // Handshake sequence (same as real extension host):
+    // 1. Send Ready (byte 2) — workbench responds with init data JSON
+    // 2. Send Initialized (byte 1) — workbench completes handshake
+    // Must send Uint8Array (not ArrayBuffer) so VSBuffer.wrap() works correctly.
     setTimeout(() => {
         showStatus?.('[ExtHost] Sending Ready (byte 2)...');
-        const buf2 = new Uint8Array([2]);
-        port.postMessage(buf2.buffer);
-    }, 100);
+        port.postMessage(new Uint8Array([2]));
+    }, 50);
+    setTimeout(() => {
+        showStatus?.('[ExtHost] Sending Initialized (byte 1)...');
+        port.postMessage(new Uint8Array([1]));
+    }, 200);
 }
 
 // === IPC Renderer ===
