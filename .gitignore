@@ -1,0 +1,4 @@
+cursor-overlay/
+dist/
+node_modules/
+*.rpm

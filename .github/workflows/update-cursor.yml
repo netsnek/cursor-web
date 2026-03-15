@@ -1,0 +1,78 @@
+name: Update Cursor
+on:
+  workflow_dispatch:
+    inputs:
+      cursor_version:
+        description: 'Cursor version (or "latest")'
+        default: 'latest'
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 06:00 UTC
+
+jobs:
+  extract-and-test:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      - name: Extract Cursor
+        run: scripts/extract-cursor.sh ${{ inputs.cursor_version || 'latest' }} amd64
+      - name: Build
+        run: scripts/build.sh x64
+      - name: Verify
+        run: scripts/verify.sh
+      - name: Read version
+        id: version
+        run: echo "version=$(head -1 VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Fix on failure
+        if: failure()
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Cursor Web build/verify failed after updating to a new Cursor version.
+            Check the build and verify output logs. Fix issues in adapter/shim.js or
+            scripts/ only. Never patch minified Cursor code directly.
+            After fixing, run scripts/build.sh && scripts/verify.sh to confirm.
+      - name: Commit update
+        run: |
+          git config user.name "kleberbaum"
+          git config user.email "kleber@snek.at"
+          VERSION=$(head -1 VERSION)
+          git add -A
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Update Cursor to $VERSION"
+          git push
+
+  build-rpm-x64:
+    needs: extract-and-test
+    uses: ./.github/workflows/build-rpm-x64.yml
+
+  build-container:
+    needs: extract-and-test
+    uses: ./.github/workflows/build-container.yml
+
+  create-release:
+    needs: [build-rpm-x64, build-container]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(head -1 VERSION)
+          gh release create "v$VERSION" cursor-web-rpm/*.rpm \
+            --title "Cursor Web $VERSION" \
+            --notes "Auto-updated to Cursor $VERSION" \
+            --latest || true

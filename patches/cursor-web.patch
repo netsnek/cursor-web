@@ -1,0 +1,165 @@
+diff --git a/src/vs/base/common/mime.ts b/src/vs/base/common/mime.ts
+index 30d59bc0..94aae372 100644
+--- a/src/vs/base/common/mime.ts
++++ b/src/vs/base/common/mime.ts
+@@ -82,6 +82,8 @@ const mapExtToMediaMimes: MapExtToMediaMimes = {
+ 	'.wma': 'audio/x-ms-wma',
+ 	'.wmv': 'video/x-ms-wmv',
+ 	'.woff': 'application/font-woff',
++	'.woff2': 'font/woff2',
++	'.ttf': 'font/ttf',
+ };
+ 
+ export function getMediaOrTextMime(path: string): string | undefined {
+diff --git a/src/vs/code/browser/workbench/workbench.html b/src/vs/code/browser/workbench/workbench.html
+index 77881982..139cf9e7 100644
+--- a/src/vs/code/browser/workbench/workbench.html
++++ b/src/vs/code/browser/workbench/workbench.html
+@@ -10,7 +10,7 @@
+ 		<!-- Mobile tweaks -->
+ 		<meta name="mobile-web-app-capable" content="yes" />
+ 		<meta name="apple-mobile-web-app-capable" content="yes" />
+-		<meta name="apple-mobile-web-app-title" content="Code">
++		<meta name="apple-mobile-web-app-title" content="Cursor">
+ 		<link rel="apple-touch-icon" href="{{WORKBENCH_WEB_BASE_URL}}/resources/server/code-192.png" />
+ 
+ 		<!-- Disable pinch zooming -->
+@@ -26,6 +26,8 @@
+ 		<link rel="icon" href="{{WORKBENCH_WEB_BASE_URL}}/resources/server/favicon.ico" type="image/x-icon" />
+ 		<link rel="manifest" href="{{WORKBENCH_WEB_BASE_URL}}/resources/server/manifest.json" crossorigin="use-credentials" />
+ 		<link rel="stylesheet" href="{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/workbench.css">
++		<!-- Cursor desktop CSS (Tailwind + Cursor styles) -->
++		<link rel="stylesheet" href="{{WORKBENCH_WEB_BASE_URL}}/out/vs/workbench/workbench.desktop.main.css">
+ 
+ 	</head>
+ 
+@@ -37,12 +39,19 @@
+ 		const baseUrl = new URL('{{WORKBENCH_WEB_BASE_URL}}', window.location.origin).toString();
+ 		globalThis._VSCODE_FILE_ROOT = baseUrl + '/out/';
+ 	</script>
++	<!-- NLS messages: load desktop JSON and set globalThis._VSCODE_NLS_MESSAGES -->
+ 	<script>
+-		performance.mark('code/willLoadWorkbenchMain');
++		(async function() {
++			try {
++				const resp = await fetch(baseUrl + '/out/nls.messages.json');
++				if (resp.ok) {
++					globalThis._VSCODE_NLS_MESSAGES = await resp.json();
++				}
++			} catch(e) {
++				console.warn('[CursorWeb] Failed to load NLS messages:', e);
++			}
++		})();
+ 	</script>
+-	<!-- always ensure built in english NLS messages -->
+-	<script type="module" src="{{WORKBENCH_NLS_FALLBACK_URL}}"></script>
+-	<!-- attempt to load NLS messages in case non-english -->
+-	<script type="module" src="{{WORKBENCH_NLS_URL}}"></script>
+-	<script type="module" src="{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/workbench.js"></script>
++	<!-- Cursor Web shim: IPC bridge, CORS proxy fetch, Electron stubs -->
++	<script type="module" src="{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/shim.js"></script>
+ </html>
+diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
+index 13882a9b..58425ac8 100644
+--- a/src/vs/server/node/webClientServer.ts
++++ b/src/vs/server/node/webClientServer.ts
+@@ -5,6 +5,7 @@
+ 
+ import { createReadStream, promises } from 'fs';
+ import * as http from 'http';
++import * as https from 'https';
+ import * as url from 'url';
+ import * as cookie from 'cookie';
+ import * as crypto from 'crypto';
+@@ -122,6 +123,10 @@ export class WebClientServer {
+ 	 */
+ 	async handle(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery, pathname: string): Promise<void> {
+ 		try {
++			// CORS proxy: /cors-proxy/HOST/path → https://HOST/path (no allowlist)
++			if (pathname.startsWith('/cors-proxy/')) {
++				return this._handleCorsProxy(req, res, parsedUrl, pathname.substring(12));
++			}
+ 			if (pathname.startsWith(STATIC_PATH) && pathname.charCodeAt(STATIC_PATH.length) === CharCode.Slash) {
+ 				return this._handleStatic(req, res, pathname.substring(STATIC_PATH.length));
+ 			}
+@@ -163,6 +168,71 @@ export class WebClientServer {
+ 		return serveFile(filePath, this._environmentService.isBuilt ? CacheControl.NO_EXPIRY : CacheControl.ETAG, this._logService, req, res, headers);
+ 	}
+ 
++	/**
++	 * CORS proxy: /cors-proxy/HOST/path → https://HOST/path
++	 * No allowlist — proxies all external requests for Cursor's API calls.
++	 */
++	private _handleCorsProxy(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery, targetPath: string): void {
++		const slashIdx = targetPath.indexOf('/');
++		const targetHost = slashIdx > 0 ? targetPath.substring(0, slashIdx) : targetPath;
++		const targetPathname = slashIdx > 0 ? targetPath.substring(slashIdx) : '/';
++
++		// Handle CORS preflight
++		if (req.method === 'OPTIONS') {
++			res.writeHead(200, {
++				'Access-Control-Allow-Origin': '*',
++				'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
++				'Access-Control-Allow-Headers': '*',
++				'Access-Control-Max-Age': '86400',
++			});
++			return void res.end();
++		}
++
++		// Collect request body
++		const chunks: Buffer[] = [];
++		req.on('data', (c: Buffer) => chunks.push(c));
++		req.on('end', () => {
++			const body = Buffer.concat(chunks);
++
++			// Forward headers, stripping hop-by-hop
++			const forwardHeaders: http.OutgoingHttpHeaders = { ...req.headers };
++			delete forwardHeaders['host'];
++			delete forwardHeaders['origin'];
++			delete forwardHeaders['referer'];
++			delete forwardHeaders['connection'];
++			delete forwardHeaders['accept-encoding'];
++			forwardHeaders['host'] = targetHost;
++
++			const proxyReq = https.request(
++				{
++					hostname: targetHost,
++					port: 443,
++					path: targetPathname + (parsedUrl.search || ''),
++					method: req.method,
++					headers: forwardHeaders,
++				},
++				(proxyRes) => {
++					const responseHeaders: http.OutgoingHttpHeaders = { ...proxyRes.headers };
++					responseHeaders['access-control-allow-origin'] = '*';
++					responseHeaders['access-control-expose-headers'] = '*';
++					delete responseHeaders['access-control-allow-credentials'];
++					res.writeHead(proxyRes.statusCode || 502, responseHeaders);
++					proxyRes.pipe(res);
++				}
++			);
++
++			proxyReq.on('error', (err) => {
++				res.writeHead(502, { 'Content-Type': 'text/plain' });
++				res.end('Proxy error: ' + err.message);
++			});
++
++			if (body.length > 0) {
++				proxyReq.write(body);
++			}
++			proxyReq.end();
++		});
++	}
++
+ 	private _getResourceURLTemplateAuthority(uri: URI): string | undefined {
+ 		const index = uri.authority.indexOf('.');
+ 		return index !== -1 ? uri.authority.substring(index + 1) : undefined;
+@@ -429,7 +499,7 @@ export class WebClientServer {
+ 			'worker-src \'self\' data: blob:;',
+ 			'style-src \'self\' \'unsafe-inline\';',
+ 			'connect-src \'self\' ws: wss: https:;',
+-			'font-src \'self\' blob:;',
++			'font-src \'self\' https: blob: data:;',
+ 			'manifest-src \'self\';'
+ 		].join(' ');
+ 

@@ -1,0 +1,29 @@
+name: Build x86_64 RPM
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  rpm-x64:
+    runs-on: ubuntu-latest
+    container: fedora:43
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install build deps
+        run: dnf install -y rpm-build nodejs python3 curl git squashfs-tools gcc gcc-c++ make libsecret-devel krb5-devel
+      - name: Extract Cursor
+        run: scripts/extract-cursor.sh latest amd64
+      - name: Build
+        run: scripts/build.sh x64
+      - name: Build RPM
+        run: |
+          VERSION=$(head -1 VERSION)
+          rpmbuild -bb cursor-web.spec \
+            --define "_topdir $(pwd)/rpmbuild" \
+            --define "cursor_version $VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cursor-web-rpm
+          path: rpmbuild/RPMS/**/*.rpm
