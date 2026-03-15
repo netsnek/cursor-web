@@ -760,6 +760,50 @@ async function seedAuthTokens() {
     }
 }
 
+// === Skip Login Button ===
+// Inject a "Skip Login" button on the onboarding page for users who want to
+// use Cursor Web without authentication (limited to non-AI features).
+function injectSkipLoginButton() {
+    const observer = new MutationObserver(() => {
+        if (document.getElementById('cursor-web-skip-login')) return;
+        // Find any element with "Log In" text (could be button, div, a, span)
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+        let loginEl = null;
+        while (walker.nextNode()) {
+            const el = walker.currentNode;
+            if (el.children.length === 0 && el.textContent?.trim() === 'Log In') {
+                loginEl = el;
+                break;
+            }
+        }
+        if (!loginEl) return;
+        // Find the container holding all the login buttons (walk up to the column container)
+        let container = loginEl.parentElement; // the Log In button wrapper
+        // Go up to find the flex column that holds both Sign Up and Log In
+        while (container && container.parentElement && container.parentElement !== document.body) {
+            const style = getComputedStyle(container);
+            if (style.flexDirection === 'column' && container.children.length >= 2) break;
+            container = container.parentElement;
+        }
+        if (!container) return;
+        const skipBtn = document.createElement('div');
+        skipBtn.id = 'cursor-web-skip-login';
+        skipBtn.textContent = 'Skip Login';
+        skipBtn.style.cssText = 'margin-top:8px;padding:8px 16px;width:100%;border:1px solid #555;border-radius:6px;background:transparent;color:#aaa;cursor:pointer;font-size:14px;text-align:center;box-sizing:border-box;';
+        skipBtn.onmouseenter = () => skipBtn.style.borderColor = '#888';
+        skipBtn.onmouseleave = () => skipBtn.style.borderColor = '#555';
+        skipBtn.onclick = () => {
+            localStorage.setItem(_storagePrefix + 'workbench.contrib.onboarding.browser.gettingStarted.contribution.ts.firsttime', 'false');
+            localStorage.setItem(_storagePrefix + 'cursor.featureStatus.dataPrivacyOnboarding', 'legacy');
+            window.location.reload();
+        };
+        container.appendChild(skipBtn);
+        showStatus('Skip Login button injected.');
+        observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+}
+
 // === Boot ===
 performance.mark('code/willLoadWorkbenchMain');
 
@@ -845,9 +889,9 @@ async function boot() {
 
         localStorage.setItem('cursor-init', '1');
         showStatus('Calling workbench.main()...');
+        injectSkipLoginButton();
         const result = workbench.main(desktopConfig);
         showStatus('workbench.main() returned: ' + typeof result);
-        // Note: onboarding overlay is NOT auto-dismissed — it contains the login UI
         if (result?.then) {
             result.then(() => showStatus('Promise resolved — workbench started.'))
                   .catch(e => showStatus('Promise rejected: ' + e + '\nStack: ' + (e?.stack || 'none')));

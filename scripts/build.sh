@@ -38,15 +38,26 @@ fi
 rm -rf dist
 cp -a "$VSCODE_OUT" dist/
 
-# 6. Overlay Cursor bundles
-# Desktop workbench (replaces web workbench)
-cp cursor-overlay/out/vs/workbench/workbench.desktop.main.js dist/out/vs/workbench/
-cp cursor-overlay/out/vs/workbench/workbench.desktop.main.css dist/out/vs/workbench/
+# 6. Overlay Cursor Web workbench (full Cursor UI) on VS Code Web backend
+# The Cursor Web workbench (workbench.desktop.main.js) provides the full Cursor
+# interface (login, chat, agent mode, etc.). VS Code Web's server provides the
+# backend (terminal via WebSocket, file system, extensions). The shim bridges
+# Electron APIs that the Cursor workbench expects to browser equivalents.
 
-# Extension host
-cp cursor-overlay/out/vs/workbench/api/node/extensionHostProcess.js dist/out/vs/workbench/api/node/
+# Cursor Web workbench JS bundle (the full Cursor UI)
+[ -f cursor-overlay/out/vs/workbench/workbench.desktop.main.js ] && \
+    cp cursor-overlay/out/vs/workbench/workbench.desktop.main.js dist/out/vs/workbench/
 
-# NLS messages
+# Cursor CSS (theme, Tailwind styles)
+[ -f cursor-overlay/out/vs/workbench/workbench.desktop.main.css ] && \
+    cp cursor-overlay/out/vs/workbench/workbench.desktop.main.css dist/out/vs/workbench/
+
+# Extension host process (Cursor's version with AI transport)
+[ -f cursor-overlay/out/vs/workbench/api/node/extensionHostProcess.js ] && \
+    cp cursor-overlay/out/vs/workbench/api/node/extensionHostProcess.js \
+       dist/out/vs/workbench/api/node/extensionHostProcess.js
+
+# NLS messages (Cursor-specific UI strings)
 cp cursor-overlay/out/nls.messages.json dist/out/
 
 # Media assets (fonts, icons, logos)
@@ -104,21 +115,29 @@ module.exports = {
 };
 ELECTRON_STUB
 
-# 10. Post-build patches to compiled server-main.js
-# These fix issues that the TypeScript patches handle at source level but also
-# need to be applied to the pre-built output when not rebuilding from source.
+# 10. Post-build patches (these are also applied as TypeScript source patches,
+# but needed here for the pre-built server-main.js output)
 echo "==> Applying post-build patches to dist/out/server-main.js..."
 
-# Terminal backend: skip duplicate registration (desktop + remote both register)
-sed -i "s/if(this.a.has(t))throw new Error(\`A terminal backend with remote authority '\${t}' was already registered.\`);this.a.set(t,e)/if(this.a.has(t))return;this.a.set(t,e)/" dist/out/server-main.js
-sed -i "s/if(this._backends.has(e))throw new Error(\`A terminal backend with remote authority '\${e}' was already registered.\`);this._backends.set(e,n)/if(this._backends.has(e))return;this._backends.set(e,n)/" dist/out/vs/workbench/workbench.desktop.main.js
-
-# CSP: allow vscode-remote-resource: for fonts and images
+# CSP: allow additional sources for fonts and images
 sed -i "s/font-src 'self' blob:/font-src 'self' https: blob: data: vscode-remote-resource:/" dist/out/server-main.js
 sed -i "s/img-src 'self' https: data: blob:/img-src 'self' https: data: blob: vscode-remote-resource:/g" dist/out/server-main.js
 
 # MIME types: add .woff2, .ttf, .wasm if not already present
 sed -i 's/".woff":"application\/font-woff"/".woff":"application\/font-woff",".woff2":"font\/woff2",".ttf":"font\/ttf",".wasm":"application\/wasm"/' dist/out/server-main.js
+
+# 11. Post-build patches for Cursor Web workbench (client bundle)
+echo "==> Applying post-build patches to Cursor Web workbench..."
+
+# Disable local terminal backend (uses Electron IPC which doesn't exist in browser).
+# The remote terminal backend (WebSocket to VS Code Web server) handles all terminals.
+# Patch: make the local terminal backend constructor return immediately without registering.
+if [ -f dist/out/vs/workbench/workbench.desktop.main.js ]; then
+    # The local terminal backend registration: registerTerminalBackend(i),t.didRegisterBackend(i)
+    # We disable it by making the constructor return before registration
+    sed -i 's/this\.ID="workbench\.contrib\.localTerminalBackend"}constructor(e,t){const i=e\.createInstance(jLi);/this.ID="workbench.contrib.localTerminalBackend"}constructor(e,t){return;const i=e.createInstance(jLi);/' \
+        dist/out/vs/workbench/workbench.desktop.main.js
+fi
 
 echo ""
 echo "==> Build complete!"
