@@ -57,8 +57,9 @@ cp -a "$VSCODE_OUT" dist/
     cp cursor-overlay/out/vs/workbench/api/node/extensionHostProcess.js \
        dist/out/vs/workbench/api/node/extensionHostProcess.js
 
-# NLS messages (Cursor-specific UI strings)
-cp cursor-overlay/out/nls.messages.json dist/out/
+# NLS messages: VS Code's NLS stays at nls.messages.json (used by server + extension host).
+# Cursor's NLS goes to nls.messages.desktop.json (loaded by browser client via HTML).
+cp cursor-overlay/out/nls.messages.json dist/out/nls.messages.desktop.json
 
 # Media assets (fonts, icons, logos)
 for f in cursor-overlay/out/media/*; do
