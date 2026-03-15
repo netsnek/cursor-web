@@ -553,6 +553,31 @@ function setupProtocolPort(port) {
     port.start();
 }
 
+// === Extension Host Port Protocol ===
+// The desktop workbench tries to start a LocalProcess extension host.
+// We fake the handshake so the workbench doesn't wait 60s for a ready message.
+// Protocol: byte 1 = Initialized, byte 2 = Ready, byte 3 = Terminate
+// After Ready, the workbench sends init data (JSON) — we absorb it.
+function setupExtensionHostPort(port) {
+    port.onmessage = () => {
+        // Absorb any messages from the workbench (init data, etc.)
+    };
+    port.start();
+    // Send Initialized (byte 1) then Ready (byte 2) after a short delay
+    // The workbench's _establishProtocol waits for Initialized,
+    // then _performHandshake waits for Ready.
+    setTimeout(() => {
+        showStatus?.('[ExtHost] Sending Initialized (byte 1)...');
+        const buf1 = new Uint8Array([1]);
+        port.postMessage(buf1.buffer);
+    }, 50);
+    setTimeout(() => {
+        showStatus?.('[ExtHost] Sending Ready (byte 2)...');
+        const buf2 = new Uint8Array([2]);
+        port.postMessage(buf2.buffer);
+    }, 100);
+}
+
 // === IPC Renderer ===
 const _ipcListeners = new Map();
 function _fire(channel, ...args) {
@@ -616,10 +641,18 @@ globalThis.vscode = {
     ipcMessagePort: {
         acquire(responseChannel, nonce) {
             showStatus?.(`IPC.port.acquire: ${responseChannel} nonce=${nonce}`);
-            // The workbench listens on window "message" for { data: nonce, ports: [port], source: window }
             const mc = new MessageChannel();
-            // Set up the port to handle the IPC protocol (init + channel requests)
-            setupProtocolPort(mc.port2);
+
+            if (responseChannel === 'vscode:startExtensionHostMessagePortResult') {
+                // Extension host protocol: send Initialized (byte 1) then Ready (byte 2)
+                // so the workbench doesn't wait 60s for a process that doesn't exist.
+                // After the handshake, the workbench sends init data — we just absorb it.
+                setupExtensionHostPort(mc.port2);
+            } else {
+                // Shared process / utility worker: IPC protocol (init + channel requests)
+                setupProtocolPort(mc.port2);
+            }
+
             setTimeout(() => {
                 showStatus?.('Posting MessagePort via window.postMessage...');
                 window.postMessage(nonce, '*', [mc.port1]);

@@ -104,6 +104,21 @@ module.exports = {
 };
 ELECTRON_STUB
 
+# 10. Post-build patches to compiled server-main.js
+# These fix issues that the TypeScript patches handle at source level but also
+# need to be applied to the pre-built output when not rebuilding from source.
+echo "==> Applying post-build patches to dist/out/server-main.js..."
+
+# Terminal backend: skip duplicate registration (desktop + remote both register)
+sed -i "s/if(this.a.has(t))throw new Error(\`A terminal backend with remote authority '\${t}' was already registered.\`);this.a.set(t,e)/if(this.a.has(t))return;this.a.set(t,e)/" dist/out/server-main.js
+
+# CSP: allow vscode-remote-resource: for fonts and images
+sed -i "s/font-src 'self' blob:/font-src 'self' https: blob: data: vscode-remote-resource:/" dist/out/server-main.js
+sed -i "s/img-src 'self' https: data: blob:/img-src 'self' https: data: blob: vscode-remote-resource:/g" dist/out/server-main.js
+
+# MIME types: add .woff2, .ttf, .wasm if not already present
+sed -i 's/".woff":"application\/font-woff"/".woff":"application\/font-woff",".woff2":"font\/woff2",".ttf":"font\/ttf",".wasm":"application\/wasm"/' dist/out/server-main.js
+
 echo ""
 echo "==> Build complete!"
 echo "    Output: $WORKDIR/dist/"

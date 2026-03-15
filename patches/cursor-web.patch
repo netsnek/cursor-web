@@ -8,7 +8,6 @@ index 30d59bc0..94aae372 100644
  	'.woff': 'application/font-woff',
 +	'.woff2': 'font/woff2',
 +	'.ttf': 'font/ttf',
-+	'.wasm': 'application/wasm',
  };
  
  export function getMediaOrTextMime(path: string): string | undefined {
@@ -60,6 +59,21 @@ index 77881982..139cf9e7 100644
 +	<!-- Cursor Web shim: IPC bridge, CORS proxy fetch, Electron stubs -->
 +	<script type="module" src="{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/shim.js"></script>
  </html>
+diff --git a/src/vs/platform/terminal/common/terminal.ts b/src/vs/platform/terminal/common/terminal.ts
+index fddc8307..500cdec9 100644
+--- a/src/vs/platform/terminal/common/terminal.ts
++++ b/src/vs/platform/terminal/common/terminal.ts
+@@ -1185,7 +1185,9 @@ class TerminalBackendRegistry implements ITerminalBackendRegistry {
+ 	registerTerminalBackend(backend: ITerminalBackend): void {
+ 		const key = this._sanitizeRemoteAuthority(backend.remoteAuthority);
+ 		if (this._backends.has(key)) {
+-			throw new Error(`A terminal backend with remote authority '${key}' was already registered.`);
++			// In Cursor Web, the desktop bundle and remote server both register
++			// a terminal backend for the same authority. Skip duplicate silently.
++			return;
+ 		}
+ 		this._backends.set(key, backend);
+ 	}
 diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
 index ad45bbab..4a2e2393 100644
 --- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
@@ -151,9 +165,18 @@ index ad45bbab..4a2e2393 100644
  		let reconnectionToken = generateUuid();
  		let isReconnection = false;
 diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
-index 13882a9b..46451ed6 100644
+index 13882a9b..45fe2ab8 100644
 --- a/src/vs/server/node/webClientServer.ts
 +++ b/src/vs/server/node/webClientServer.ts
+@@ -421,7 +421,7 @@ export class WebClientServer {
+ 
+ 		const cspDirectives = [
+ 			'default-src \'self\';',
+-			'img-src \'self\' https: data: blob:;',
++			'img-src \'self\' https: data: blob: vscode-remote-resource:;',
+ 			'media-src \'self\';',
+ 			`script-src 'self' 'unsafe-eval' ${WORKBENCH_NLS_BASE_URL ?? ''} blob: 'nonce-1nline-m4p' ${this._getScriptCspHashes(data).join(' ')} '${webWorkerExtensionHostIframeScriptSHA}' 'sha256-/r7rqQ+yrxt57sxLuQ6AMYcy/lUpvAIzHjIJt/OeLWU=' ${useTestResolver ? '' : `http://${remoteAuthority}`};`,  // the sha is the same as in src/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html
+ 			'child-src \'self\';',
 @@ -429,7 +429,7 @@ export class WebClientServer {
  			'worker-src \'self\' data: blob:;',
  			'style-src \'self\' \'unsafe-inline\';',
@@ -163,3 +186,12 @@ index 13882a9b..46451ed6 100644
  			'manifest-src \'self\';'
  		].join(' ');
  
+@@ -482,7 +482,7 @@ export class WebClientServer {
+ 		const data = (await promises.readFile(filePath)).toString();
+ 		const cspDirectives = [
+ 			'default-src \'self\';',
+-			'img-src \'self\' https: data: blob:;',
++			'img-src \'self\' https: data: blob: vscode-remote-resource:;',
+ 			'media-src \'none\';',
+ 			`script-src 'self' ${this._getScriptCspHashes(data).join(' ')};`,
+ 			'style-src \'self\' \'unsafe-inline\';',
