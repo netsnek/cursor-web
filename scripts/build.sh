@@ -72,9 +72,22 @@ for ext in cursor-overlay/extensions/*/; do
 done
 
 # 7. Install shim
-cp adapter/shim.js dist/out/vs/code/browser/workbench/
+cp adapter/shim.js dist/out/vs/code/browser/workbench/workbench-desktop-shim.js
 
-# 8. Create Electron stub for cursor extensions that require('electron')
+# 8. Install Cursor-specific node_modules (not in VS Code's deps)
+# Copy from extracted Cursor overlay — these include @sentry, @opentelemetry, etc.
+CURSOR_MODULES="$WORKDIR/cursor-overlay/node_modules"
+if [ -d "$CURSOR_MODULES" ]; then
+    echo "==> Copying Cursor node_modules..."
+    for pkg in "$CURSOR_MODULES"/*; do
+        PKG_NAME=$(basename "$pkg")
+        if [ ! -e "$WORKDIR/dist/node_modules/$PKG_NAME" ]; then
+            cp -a "$pkg" "$WORKDIR/dist/node_modules/$PKG_NAME"
+        fi
+    done
+fi
+
+# 9. Create Electron stub for cursor extensions that require('electron')
 mkdir -p dist/out/node_modules/electron
 cat > dist/out/node_modules/electron/index.js << 'ELECTRON_STUB'
 // Stub: cursor extensions import electron for IPC — not available in serve-web

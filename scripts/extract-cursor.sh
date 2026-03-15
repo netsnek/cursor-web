@@ -120,6 +120,11 @@ for ext in "$APP_ROOT/extensions"/cursor-*/ "$APP_ROOT/extensions"/theme-cursor/
   [ -d "$ext" ] && cp -a "$ext" "$OVERLAY/extensions/"
 done
 
+# Node modules (Cursor-specific deps: @sentry, @opentelemetry, etc.)
+if [ -d "$APP_ROOT/node_modules" ]; then
+  cp -a "$APP_ROOT/node_modules" "$OVERLAY/node_modules"
+fi
+
 # Product.json (reference)
 cp "$APP_ROOT/product.json" "$OVERLAY/product.json"
 

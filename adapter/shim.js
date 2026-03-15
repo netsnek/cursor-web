@@ -401,10 +401,10 @@ async function _loadVsda() {
     if (_vsdaLoading) return _vsdaLoading;
     _vsdaLoading = (async () => {
         try {
-            // In the built output, vsda files are served relative to the base URL.
-            // The server serves from VS Code's output root, so use origin-relative paths.
-            const wasmUrl = '/node_modules/vsda/rust/web/vsda_bg.wasm';
-            const jsUrl = '/node_modules/vsda/rust/web/vsda.js';
+            // vsda files are in the static output directory
+            const staticBase = (globalThis._VSCODE_FILE_ROOT || '/out/').replace(/\/out\/$/, '');
+            const wasmUrl = staticBase + '/node_modules/vsda/rust/web/vsda_bg.wasm';
+            const jsUrl = staticBase + '/node_modules/vsda/rust/web/vsda.js';
             // Load the vsda JS (sets globalThis.vsda_web)
             await new Promise((resolve, reject) => {
                 const script = document.createElement('script');
@@ -532,7 +532,7 @@ function setupProtocolPort(port) {
             state = 1;
             showStatus?.(`[Port] Handshake (${buf.length}B), sending init...`);
             const initBuf = buildInit();
-            port.postMessage(initBuf.buffer);
+            port.postMessage(initBuf);
             return;
         }
         if (state === 1) {
@@ -547,7 +547,7 @@ function setupProtocolPort(port) {
         }
 
         handleProtocolMessage(buf, (resp) => {
-            port.postMessage(resp.buffer);
+            port.postMessage(resp);
         });
     };
     port.start();
